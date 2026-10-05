@@ -1,0 +1,210 @@
+---
+- name: "Audit & Analisis Konfigurasi Server Lama (192.168.1.2)"
+  hosts: old_servers
+  gather_facts: yes
+  become: yes
+
+  tasks:
+    - name: Pastikan direktori reports lokal tersedia
+      delegate_to: localhost
+      become: no
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../reports"
+        state: directory
+        mode: '0755'
+
+    - name: 1. Periksa Listening Ports (ss / netstat)
+      ansible.builtin.shell: |
+        if command -v ss >/dev/null 2>&1; then
+          ss -tulpn
+        elif command -v netstat >/dev/null 2>&1; then
+          netstat -tulpn
+        else
+          echo "Perintah ss/netstat tidak ditemukan"
+        fi
+      register: listening_ports_raw
+      changed_when: false
+      failed_when: false
+
+    - name: 2. Periksa Running Systemd Services
+      ansible.builtin.shell: |
+        systemctl list-units --type=service --state=running --no-pager --no-legend | awk '{print $1}'
+      register: running_services_raw
+      changed_when: false
+      failed_when: false
+
+    - name: 3. Deteksi Web Server (Nginx / Apache / Caddy / Traefik)
+      ansible.builtin.shell: |
+        echo "=== NGINX ==="
+        if command -v nginx >/dev/null 2>&1; then
+          nginx -v 2>&1
+          echo "Sites Enabled:"
+          ls -la /etc/nginx/sites-enabled/ 2>/dev/null || ls -la /etc/nginx/conf.d/ 2>/dev/null || true
+        else
+          echo "Nginx not installed"
+        fi
+
+        echo -e "\n=== APACHE ==="
+        if command -v apache2 >/dev/null 2>&1; then
+          apache2 -v
+          ls -la /etc/apache2/sites-enabled/ 2>/dev/null || true
+        elif command -v httpd >/dev/null 2>&1; then
+          httpd -v
+          ls -la /etc/httpd/conf.d/ 2>/dev/null || true
+        else
+          echo "Apache/Httpd not installed"
+        fi
+      register: webserver_info_raw
+      changed_when: false
+      failed_when: false
+
+    - name: 4. Deteksi Database & Cache Engines
+      ansible.builtin.shell: |
+        echo "=== MYSQL / MARIADB ==="
+        if systemctl is-active --quiet mysql 2>/dev/null || systemctl is-active --quiet mariadb 2>/dev/null; then
+          echo "Status: Active"
+          mysql --version 2>/dev/null || true
+        else
+          echo "MySQL/MariaDB is not active or not installed"
+        fi
+
+        echo -e "\n=== POSTGRESQL ==="
+        if systemctl is-active --quiet postgresql 2>/dev/null; then
+          echo "Status: Active"
+          psql --version 2>/dev/null || true
+        else
+          echo "PostgreSQL is not active or not installed"
+        fi
+
+        echo -e "\n=== REDIS ==="
+        if systemctl is-active --quiet redis 2>/dev/null || systemctl is-active --quiet redis-server 2>/dev/null; then
+          echo "Status: Active"
+          redis-server --version 2>/dev/null || true
+        else
+          echo "Redis is not active or not installed"
+        fi
+
+        echo -e "\n=== MONGODB ==="
+        if systemctl is-active --quiet mongod 2>/dev/null; then
+          echo "Status: Active"
+          mongod --version 2>/dev/null || true
+        else
+          echo "MongoDB is not active or not installed"
+        fi
+      register: db_info_raw
+      changed_when: false
+      failed_when: false
+
+    - name: 5. Deteksi Runtimes & Containerization (Docker, Node, Python, PHP)
+      ansible.builtin.shell: |
+        echo "=== DOCKER ==="
+        if command -v docker >/dev/null 2>&1; then
+          docker --version
+          echo "Running Containers:"
+          docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "Cannot query docker daemon"
+          echo "Docker Compose files found:"
+          find /home /var/www /opt -maxdepth 3 \( -name "docker-compose.yml" -o -name "compose.yaml" \) 2>/dev/null || true
+        else
+          echo "Docker not installed"
+        fi
+
+        echo -e "\n=== NODE.JS & PM2 ==="
+        if command -v node >/dev/null 2>&1; then
+          echo "Node version: $(node -v)"
+          echo "NPM version: $(npm -v 2>/dev/null || echo 'none')"
+          if command -v pm2 >/dev/null 2>&1; then
+            echo "PM2 process list:"
+            pm2 list 2>/dev/null || true
+          fi
+        else
+          echo "Node.js not installed"
+        fi
+
+        echo -e "\n=== PHP ==="
+        if command -v php >/dev/null 2>&1; then
+          php -v | head -n 1
+          echo "PHP Modules: $(php -m | tr '\n' ' ')"
+        else
+          echo "PHP not installed"
+        fi
+
+        echo -e "\n=== PYTHON ==="
+        if command -v python3 >/dev/null 2>&1; then
+          python3 --version
+        fi
+      register: runtime_info_raw
+      changed_when: false
+      failed_when: false
+
+    - name: 6. Deteksi Direktori Aplikasi & Konfigurasi (.env, web root)
+      ansible.builtin.shell: |
+        echo "=== DIRECTORY /var/www ==="
+        ls -la /var/www 2>/dev/null || echo "/var/www does not exist"
+
+        echo -e "\n=== DIRECTORY /opt ==="
+        ls -la /opt 2>/dev/null || echo "/opt is empty"
+
+        echo -e "\n=== DIRECTORY /home/user ==="
+        ls -la /home/user 2>/dev/null || true
+
+        echo -e "\n=== DETEKSI FILE ENV / CONFIG ==="
+        find /var/www /opt /home/user -maxdepth 4 -type f \( -name ".env" -o -name "*.conf" -o -name "config.json" -o -name "settings.py" \) 2>/dev/null | head -n 30 || true
+      register: app_paths_raw
+      changed_when: false
+      failed_when: false
+
+    - name: 7. Deteksi Cron Jobs & Scheduled Tasks
+      ansible.builtin.shell: |
+        echo "=== CRONTAB USER: user ==="
+        crontab -u user -l 2>/dev/null || echo "No crontab for user"
+
+        echo -e "\n=== CRONTAB USER: root ==="
+        crontab -l 2>/dev/null || echo "No crontab for root"
+
+        echo -e "\n=== /etc/cron.d/ ==="
+        ls -la /etc/cron.d/ 2>/dev/null || true
+      register: cron_info_raw
+      changed_when: false
+      failed_when: false
+
+    - name: 8. Simpan Laporan Markdown di Komputer Lokal
+      delegate_to: localhost
+      become: no
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/server_analysis_report.md.j2"
+        dest: "{{ playbook_dir }}/../reports/server_analysis_report.md"
+        mode: '0644'
+
+    - name: 9. Simpan Ringkasan JSON di Komputer Lokal
+      delegate_to: localhost
+      become: no
+      ansible.builtin.copy:
+        dest: "{{ playbook_dir }}/../reports/server_facts.json"
+        content: "{{ {
+          'hostname': ansible_hostname,
+          'ip': ansible_default_ipv4.address | default('192.168.1.2'),
+          'os': ansible_distribution ~ ' ' ~ ansible_distribution_version,
+          'kernel': ansible_kernel,
+          'architecture': ansible_architecture,
+          'cpu_cores': ansible_processor_vcpus | default(ansible_processor_count),
+          'ram_mb': ansible_memtotal_mb,
+          'listening_ports': listening_ports_raw.stdout_lines,
+          'running_services': running_services_raw.stdout_lines,
+          'webserver_info': webserver_info_raw.stdout,
+          'database_info': db_info_raw.stdout,
+          'runtime_info': runtime_info_raw.stdout,
+          'app_paths': app_paths_raw.stdout,
+          'cron_info': cron_info_raw.stdout
+        } | to_nice_json }}"
+        mode: '0644'
+
+    - name: Tampilkan Ringkasan Hasil Analisis
+      ansible.builtin.debug:
+        msg:
+          - "=========================================================="
+          - " AUDIT SELESAI UNTUK SERVER: {{ ansible_hostname }} ({{ ansible_default_ipv4.address | default('192.168.1.2') }})"
+          - " OS: {{ ansible_distribution }} {{ ansible_distribution_version }} ({{ ansible_architecture }})"
+          - " CPU / RAM: {{ ansible_processor_vcpus | default(1) }} vCPU / {{ ansible_memtotal_mb }} MB"
+          - " Laporan lengkap tersimpan di: reports/server_analysis_report.md"
+          - " Data JSON tersimpan di: reports/server_facts.json"
+          - "=========================================================="

@@ -1,0 +1,70 @@
+# Hasil Analisis & Audit Server Lama (Migrasi VM)
+
+- **Tanggal Analisis**: {{ ansible_date_time.iso8601 | default('N/A') }}
+- **Target Hostname**: `{{ ansible_hostname }}`
+- **IP Address**: `{{ ansible_default_ipv4.address | default('192.168.1.2') }}`
+- **OS Distribution**: `{{ ansible_distribution }} {{ ansible_distribution_version }}` (Kernel: `{{ ansible_kernel }}`)
+- **Arsitektur**: `{{ ansible_architecture }}`
+- **Spesifikasi**: {{ ansible_processor_vcpus | default(ansible_processor_count) }} vCPU | {{ ansible_memtotal_mb }} MB RAM
+
+---
+
+## 1. Network & Listening Ports
+Port-port aktif yang sedang mendengarkan koneksi:
+
+```text
+{{ listening_ports_raw.stdout }}
+```
+
+---
+
+## 2. Active Systemd Services
+Daftar service yang sedang running:
+
+```text
+{% for s in running_services_raw.stdout_lines %}
+- {{ s }}
+{% endfor %}
+```
+
+---
+
+## 3. Web Server & Virtual Hosts
+```text
+{{ webserver_info_raw.stdout }}
+```
+
+---
+
+## 4. Database & Caching Services
+```text
+{{ db_info_raw.stdout }}
+```
+
+---
+
+## 5. Runtimes & Containerization (Docker, Node, PHP, Python)
+```text
+{{ runtime_info_raw.stdout }}
+```
+
+---
+
+## 6. Lokasi File Aplikasi & Konfigurasi (.env)
+```text
+{{ app_paths_raw.stdout }}
+```
+
+---
+
+## 7. Scheduled Tasks (Cron)
+```text
+{{ cron_info_raw.stdout }}
+```
+
+---
+
+## Rekomendasi Langkah Selanjutnya (Fase 2 - Migrasi)
+1. Periksa bagian **Database** dan tentukan apakah perlu dump otomatis (misal `mysqldump` / `pg_dump`).
+2. Periksa bagian **Lokasi File Aplikasi** dan **Web Server Sites-Enabled** untuk menentukan folder sumber yang akan di-sync (menggunakan `ansible.posix.synchronize` / `rsync`).
+3. Kirimkan file ini kembali ke asisten AI untuk langsung dibuatkan **Ansible Deployment Playbook** untuk server baru Anda!
