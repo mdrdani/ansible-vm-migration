@@ -95,11 +95,11 @@
         state: present
         update_cache: yes
 
-    - name: 2.3 Install Apache2 dan modul PHP 7.2 untuk Candy CBT
+    - name: 2.3 Install Apache2 dan modul PHP 7.2 FPM untuk Candy CBT
       ansible.builtin.apt:
         name:
           - apache2
-          - libapache2-mod-php7.2
+          - php7.2-fpm
           - php7.2
           - php7.2-cli
           - php7.2-common
@@ -122,20 +122,38 @@
           - mariadb-client
         state: present
 
-    - name: 2.5 Pastikan Service MariaDB dan Apache berjalan & auto-start
+    - name: 2.5 Pastikan Service MariaDB, PHP-FPM, dan Apache berjalan & auto-start
       ansible.builtin.service:
         name: "{{ item }}"
         state: started
         enabled: yes
       loop:
         - mariadb
+        - php7.2-fpm
         - apache2
 
-    - name: 2.6 Konfigurasi MariaDB compatibility untuk Candy CBT
+    - name: 2.6 Konfigurasi MariaDB High Performance & Buffer Pool untuk CBT
       ansible.builtin.copy:
-        dest: /etc/mysql/mariadb.conf.d/99-cbt-compatibility.cnf
+        dest: /etc/mysql/mariadb.conf.d/99-cbt-performance.cnf
         content: |
           [mysqld]
+          max_connections = 200
+          max_user_connections = 180
+          connect_timeout = 10
+          wait_timeout = 60
+          interactive_timeout = 60
+
+          innodb_buffer_pool_size = 384M
+          innodb_log_file_size = 64M
+          innodb_log_buffer_size = 16M
+          innodb_file_per_table = 1
+          innodb_flush_log_at_trx_commit = 2
+          innodb_flush_method = O_DIRECT
+
+          tmp_table_size = 32M
+          max_heap_table_size = 32M
+          table_open_cache = 400
+
           sql_mode = "NO_ENGINE_SUBSTITUTION"
           character-set-server = utf8mb4
           collation-server = utf8mb4_unicode_ci
@@ -143,9 +161,30 @@
         mode: '0644'
       notify: Restart MariaDB
 
-    - name: 2.7 Optimasi konfigurasi PHP 7.2 untuk CBT di Apache
+    - name: 2.7 Konfigurasi PHP-FPM pool www.conf
+      ansible.builtin.copy:
+        dest: /etc/php/7.2/fpm/pool.d/www.conf
+        content: |
+          [www]
+          user = www-data
+          group = www-data
+          listen = /run/php/php7.2-fpm.sock
+          listen.owner = www-data
+          listen.group = www-data
+          listen.mode = 0660
+          pm = dynamic
+          pm.max_children = 35
+          pm.start_servers = 8
+          pm.min_spare_servers = 5
+          pm.max_spare_servers = 15
+          pm.max_requests = 1000
+          request_terminate_timeout = 300s
+        mode: '0644'
+      notify: Restart PHP-FPM
+
+    - name: 2.8 Optimasi konfigurasi PHP 7.2 FPM (memory, upload, timezone)
       ansible.builtin.ini_file:
-        path: /etc/php/7.2/apache2/php.ini
+        path: /etc/php/7.2/fpm/php.ini
         section: PHP
         option: "{{ item.option }}"
         value: "{{ item.value }}"
@@ -156,35 +195,74 @@
         - { option: 'memory_limit', value: '256M' }
         - { option: 'max_execution_time', value: '300' }
         - { option: 'date.timezone', value: 'Asia/Jakarta' }
-      notify: Restart Apache
+        - { option: 'expose_php', value: 'Off' }
+      notify: Restart PHP-FPM
 
-    - name: 2.8 Buat direktori modul PHP 7.2 untuk ionCube
+    - name: 2.9 Konfigurasi OPcache Agresif pada PHP-FPM
+      ansible.builtin.ini_file:
+        path: /etc/php/7.2/fpm/php.ini
+        section: opcache
+        option: "{{ item.option }}"
+        value: "{{ item.value }}"
+        no_extra_spaces: yes
+      loop:
+        - { option: 'opcache.enable', value: '1' }
+        - { option: 'opcache.enable_cli', value: '0' }
+        - { option: 'opcache.memory_consumption', value: '128' }
+        - { option: 'opcache.interned_strings_buffer', value: '16' }
+        - { option: 'opcache.max_accelerated_files', value: '10000' }
+        - { option: 'opcache.revalidate_freq', value: '60' }
+        - { option: 'opcache.save_comments', value: '1' }
+        - { option: 'opcache.fast_shutdown', value: '1' }
+      notify: Restart PHP-FPM
+
+    - name: 2.10 Buat direktori modul PHP 7.2 untuk ionCube
       ansible.builtin.file:
         path: /usr/lib/php/20170718
         state: directory
         mode: '0755'
 
-    - name: 2.9 Pasang ionCube Loader pada Server Baru
+    - name: 2.11 Pasang ionCube Loader pada Server Baru
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../reports/migration_data/ioncube_loader_lin_7.2.so"
         dest: /usr/lib/php/20170718/ioncube_loader_lin_7.2.so
         mode: '0755'
       ignore_errors: yes
 
-    - name: 2.10 Konfigurasi zend_extension ionCube di php.ini Apache
+    - name: 2.12 Konfigurasi zend_extension ionCube di php.ini PHP-FPM
       ansible.builtin.lineinfile:
-        path: /etc/php/7.2/apache2/php.ini
+        path: /etc/php/7.2/fpm/php.ini
         insertafter: '^\[PHP\]'
         line: 'zend_extension = /usr/lib/php/20170718/ioncube_loader_lin_7.2.so'
         state: present
       ignore_errors: yes
+      notify: Restart PHP-FPM
+
+    - name: 2.13 Tuning Apache MPM Event
+      ansible.builtin.copy:
+        dest: /etc/apache2/mods-available/mpm_event.conf
+        content: |
+          <IfModule mpm_event_module>
+              StartServers             2
+              MinSpareThreads          25
+              MaxSpareThreads          75
+              ThreadLimit              64
+              ThreadsPerChild          25
+              MaxRequestWorkers        150
+              MaxConnectionsPerChild   1000
+          </IfModule>
+        mode: '0644'
       notify: Restart Apache
 
-    - name: 2.11 Aktifkan modul Apache (rewrite, headers, php7.2)
+    - name: 2.14 Aktifkan Apache MPM Event, Proxy FCGI, dan PHP-FPM
       ansible.builtin.shell: |
+        a2dismod php7.2 || true
+        a2dismod mpm_prefork || true
+        a2enmod mpm_event
+        a2enmod proxy_fcgi setenvif
+        a2enconf php7.2-fpm
         a2enmod rewrite
         a2enmod headers
-        a2enmod php7.2
       changed_when: false
       notify: Restart Apache
 
@@ -304,6 +382,11 @@
     - name: Restart Apache
       ansible.builtin.service:
         name: apache2
+        state: restarted
+
+    - name: Restart PHP-FPM
+      ansible.builtin.service:
+        name: php7.2-fpm
         state: restarted
 
     - name: Restart MariaDB
