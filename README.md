@@ -1,6 +1,14 @@
 # Ansible VM Migration & Discovery Project
 
-Proyek Ansible ini dibuat untuk menganalisis dan mengaudit seluruh konfigurasi aplikasi, service, runtime, dan database pada server lama (`192.168.1.2`) sebelum dipindahkan secara otomatis ke server baru tanpa konfigurasi manual ulang.
+Proyek Ansible ini dibuat untuk menganalisis konfigurasi aplikasi CBT dan database pada server lama (`192.168.1.2`), kemudian memigrasikannya secara otomatis ke server baru (`192.168.1.3`) tanpa konfigurasi manual.
+
+---
+
+## Arsitektur Migrasi
+
+- **Source VM (Server Lama)**: `192.168.1.2` (Ubuntu 18.04, Apache 2.4, PHP 7.2, MariaDB 10.1, Candy CBT v2.9.2, DB: `xcandyr4`)
+- **Target VM (Server Baru)**: `192.168.1.3` (Ubuntu 22.04 LTS, Apache 2.4, PHP 7.2 via PPA Ondrej, MariaDB 10.6)
+- **Controller**: WSL / Linux Machine
 
 ---
 
@@ -8,71 +16,61 @@ Proyek Ansible ini dibuat untuk menganalisis dan mengaudit seluruh konfigurasi a
 
 ```text
 ansible-vm-migration/
-├── ansible.cfg                          # Konfigurasi Ansible (host key checking disabled, yaml output)
-├── inventory.ini                        # Target server lama (192.168.1.2) & template server baru
-├── run.sh                               # Script otomatis (cek dependensi, ping test, & eksekusi)
+├── ansible.cfg                           # Konfigurasi Ansible (host key checking disabled, yaml output)
+├── inventory.ini                         # Konfigurasi host old_servers & new_servers
+├── run.sh                                # Script audit & discovery (Fase 1)
+├── migrate.sh                            # Script migrasi otomatis (Fase 2)
 ├── playbooks/
-│   └── discover_old_server.yml          # Playbook audit & discovery non-intrusif
+│   ├── discover_old_server.yml           # Playbook audit & discovery non-intrusif
+│   └── migrate_to_new_server.yml         # Playbook migrasi database & web apps
 ├── templates/
-│   └── server_analysis_report.md.j2     # Template laporan hasil audit
-└── reports/                             # Hasil audit akan otomatis tersimpan di sini
+│   └── server_analysis_report.md.j2      # Template laporan hasil audit
+└── reports/                              # Output laporan & data backup
     ├── server_analysis_report.md
-    └── server_facts.json
+    ├── server_facts.json
+    └── migration_data/
+        ├── xcandyr4_backup.sql
+        ├── cbt_backup.tar.gz
+        └── ioncube_loader_lin_7.2.so
 ```
-
----
-
-## Persyaratan Awal di Laptop / Komputer Anda
-
-Karena server `192.168.1.2` berada di jaringan lokal (LAN) Anda:
-
-1. **Ansible**:
-   - macOS: `brew install ansible`
-   - Linux: `sudo apt update && sudo apt install -y ansible`
-
-2. **sshpass** (dibutuhkan karena autentikasi SSH menggunakan password):
-   - macOS: `brew install hudochenkov/sshpass/sshpass`
-   - Linux: `sudo apt install -y sshpass`
 
 ---
 
 ## Cara Menjalankan
 
-Masuk ke direktori proyek ini lalu jalankan script bantuan:
-
+### Fase 1: Discovery & Audit Server Lama
+Untuk menjalankan audit awal pada server lama:
 ```bash
-cd /Users/mdrdani/.gemini/antigravity-ide/scratch/ansible-vm-migration
 ./run.sh
 ```
 
-Atau jika ingin menjalankan playbook langsung via Ansible:
-
+### Fase 2: Eksekusi Migrasi Otomatis ke Server Baru
+Untuk memigrasikan database `xcandyr4` dan aplikasi `/var/www/html/cbt` ke server `192.168.1.3`:
 ```bash
-ansible-playbook playbooks/discover_old_server.yml
+./migrate.sh
+```
+Atau langsung melalui Ansible Playbook:
+```bash
+ansible-playbook -i inventory.ini playbooks/migrate_to_new_server.yml
 ```
 
 ---
 
-## Hasil Analisis (Fase 1)
-
-Setelah playbook selesai dijalankan, dua file laporan akan terbentuk otomatis:
-- [server_analysis_report.md](file:///Users/mdrdani/.gemini/antigravity-ide/scratch/ansible-vm-migration/reports/server_analysis_report.md)
-- [server_facts.json](file:///Users/mdrdani/.gemini/antigravity-ide/scratch/ansible-vm-migration/reports/server_facts.json)
-
-Laporan ini memuat:
-- Spesifikasi hardware & OS
-- Port dan service yang sedang berjalan
-- Konfigurasi Web Server (Nginx / Apache) & Virtual Host
-- Status Database (MySQL, PostgreSQL, Redis, MongoDB)
-- Runtime aktif (Docker containers, Node.js, PM2, Python, PHP)
-- Lokasi folder aplikasi (`/var/www`, `/opt`, `/home/user`) dan file `.env`
-- Jadwal Cron job
-
----
-
-## Langkah Selanjutnya (Fase 2 - Migrasi ke Server Baru)
-
-Setelah laporan di atas terbentuk:
-1. Bagikan isi file `server_analysis_report.md` di chat ini.
-2. Berikan IP & akses SSH server baru Anda.
-3. Kami akan langsung mengenerate **Ansible Deployment & Data Migration Playbook** yang siap dijalankan untuk mereplikasi server lama ke server baru secara otomatis.
+## Apa yang Dilakukan oleh Playbook Migrasi (Fase 2)?
+1. **Ekspor Server Lama (`192.168.1.2`)**:
+   - Dump database `xcandyr4` menggunakan `mysqldump`
+   - Mengompresi folder `/var/www/html/cbt` dan `.htaccess`
+   - Mengambil binary `ioncube_loader_lin_7.2.so`
+2. **Provisioning Server Baru (`192.168.1.3`)**:
+   - Update apt cache & pasang paket dependensi dasar
+   - Tambahkan repository `ppa:ondrej/php` (untuk runtime PHP 7.2 di Ubuntu 22.04)
+   - Install Apache2, modul PHP 7.2 (`mysqli`, `gd`, `curl`, `zip`, `mbstring`, dll.), dan MariaDB Server
+   - Konfigurasi tuning `php.ini` (upload limit 128MB, memory limit 256MB)
+   - Konfigurasi `sql_mode = "NO_ENGINE_SUBSTITUTION"` pada MariaDB
+   - Konfigurasi modul Apache `rewrite`, `headers`, dan VirtualHost
+3. **Restore & Aktivasi**:
+   - Buat database `xcandyr4` dan user `phpmyadmin` di MariaDB
+   - Restore database `xcandyr4`
+   - Ekstrak source code aplikasi ke `/var/www/html/`
+   - Set ownership `www-data:www-data` dan hak akses upload
+   - Uji respon HTTP aplikasi di `http://192.168.1.3/cbt/`

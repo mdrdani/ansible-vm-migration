@@ -4,6 +4,9 @@ set -e
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 cd "$DIR"
 
+# Bypass warning WSL world-writable directory agar ansible.cfg tetap dibaca
+export ANSIBLE_CONFIG="$DIR/ansible.cfg"
+
 echo "=========================================================="
 echo "    Ansible Discovery & Audit Tool - Server 192.168.1.2    "
 echo "=========================================================="
@@ -31,7 +34,7 @@ fi
 
 # 3. Uji Ping Ansible
 echo -e "\n🔍 Menguji koneksi Ansible ke 192.168.1.2..."
-ansible old_servers -m ping || {
+ansible old_servers -i "$DIR/inventory.ini" -m ping || {
     echo -e "\n❌ Gagal terhubung ke 192.168.1.2!"
     echo "   Pastikan:"
     echo "   1. Komputer Anda berada di jaringan LAN / WiFi yang sama dengan 192.168.1.2"
@@ -42,7 +45,7 @@ ansible old_servers -m ping || {
 
 # 4. Jalankan Discovery Playbook
 echo -e "\n🚀 Menjalankan Audit & Analisis Server Lama..."
-ansible-playbook playbooks/discover_old_server.yml
+ansible-playbook -i "$DIR/inventory.ini" "$DIR/playbooks/discover_old_server.yml"
 
 echo -e "\n✅ Selesai!"
 echo "📄 Laporan Markdown: reports/server_analysis_report.md"

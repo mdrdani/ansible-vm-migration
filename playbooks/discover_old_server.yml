@@ -101,7 +101,7 @@
         if command -v docker >/dev/null 2>&1; then
           docker --version
           echo "Running Containers:"
-          docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "Cannot query docker daemon"
+          docker ps --format "table {% raw %}{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}{% endraw %}" 2>/dev/null || echo "Cannot query docker daemon"
           echo "Docker Compose files found:"
           find /home /var/www /opt -maxdepth 3 \( -name "docker-compose.yml" -o -name "compose.yaml" \) 2>/dev/null || true
         else
